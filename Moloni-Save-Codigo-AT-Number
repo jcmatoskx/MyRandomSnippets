@@ -1,0 +1,53 @@
+
+// Add action hook to handle the Moloni document insertion event
+add_action('moloni_after_insert_document', 'save_codigo_at', 10, 4);
+
+	// On Order complete > access Moloni API > GETPDFLINK > Sanitize string and get Hash > Get document ID from order > 
+	// Retreive from the Database table moloni_api the access token from column main_token
+// Function to save the transport code when a Moloni document is inserted
+function save_codigo_at($order_id) {
+    global $wpdb;
+
+    // Retrieve Moloni API token from the database
+    $table_name = "wp_moloni_api";
+    $retrieve_data = $wpdb->get_results("SELECT main_token FROM $table_name WHERE id = 1");
+    $maintoken = $retrieve_data[0]->main_token ?? '';
+
+    // Extract 'your_reference' from the order object because it is a public available object from the $order_id which is specific to moloni and not the standard woocommerce $order_id object
+    $your_reference = $order_id->your_reference ?? '';
+  error_log('MOLONILOG save_codigo_at function ran for ' .  $your_reference);
+    // Prepare data for the API request
+    $postData = array('company_id' => 'yourcompanyidhere', 'your_reference' => $your_reference);
+    $arguments = array('method' => 'POST', 'headers' => array('Content-Type' => 'application/x-www-form-urlencoded'), 'body' => $postData);
+    
+    // Make the API request to Moloni
+    $response = wp_remote_post("https://api.moloni.pt/v1/documents/getOne/?access_token=$maintoken", $arguments);
+    if (is_wp_error($response)) {
+        error_log('MOLONILOG API Request Error: ' . $response->get_error_message());
+        return;
+    }
+
+    // Process the API response
+    $response_body = wp_remote_retrieve_body($response);
+    $response_data = json_decode($response_body, true);
+    if (!isset($response_data['transport_code'])) {
+        error_log('MOLONILOG API Response does not contain transport code');
+        return;
+    }
+
+    // Extract the transport code from the response
+    $transportcode = $response_data['transport_code'];
+    
+    // Process the WooCommerce order
+    // Remove '#' from your_reference to get the actual WooCommerce order ID
+    $wc_order_id = str_replace('#', '', $your_reference);
+    $wc_order = wc_get_order($wc_order_id);
+    if ($wc_order) {
+        // Update the order meta data with the transport code
+        $wc_order->update_meta_data('_codigo_at', $transportcode);
+        $wc_order->save();
+    } else {
+        error_log('MOLONILOG Failed to retrieve WooCommerce order for ID: ' . $wc_order_id);
+    }
+}
+
